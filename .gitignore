@@ -1,0 +1,55 @@
+# Dependencies
+node_modules/
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# Environment
+.env
+.env.local
+kaggle.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build outputs
+dist/
+build/
+*.egg-info/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Database
+*.db
+*.sqlite3
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Model weights (large files)
+*.pth
+*.pt
+*.h5
+*.onnx
+
+# LUNA16 data (large files)
+luna/
+data/LUNA16/
+*.mhd
+*.raw
+*.zraw
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
