@@ -250,8 +250,11 @@ def get_model(device: str = 'cpu', pretrained_path: str = None) -> UNet3D:
     model = UNet3D(in_channels=1, out_channels=1, init_features=32)
     
     if pretrained_path:
-        state_dict = torch.load(pretrained_path, map_location=device)
-        model.load_state_dict(state_dict)
+        checkpoint = torch.load(pretrained_path, map_location=device, weights_only=False)
+        if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+            model.load_state_dict(checkpoint['model_state_dict'])
+        else:
+            model.load_state_dict(checkpoint)
     
     model = model.to(device)
     return model

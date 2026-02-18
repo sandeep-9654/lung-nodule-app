@@ -49,7 +49,7 @@ def load_model():
         
         if os.path.exists(WEIGHTS_PATH):
             print(f"Loading weights from: {WEIGHTS_PATH}")
-            checkpoint = torch.load(WEIGHTS_PATH, map_location=DEVICE)
+            checkpoint = torch.load(WEIGHTS_PATH, map_location=DEVICE, weights_only=False)
             if 'model_state_dict' in checkpoint:
                 model.load_state_dict(checkpoint['model_state_dict'])
             else:
@@ -184,29 +184,44 @@ def predict():
                 })
             
             # Load and preprocess CT scan
+            print(f"Loading CT scan: {mhd_path}")
             volume, metadata = load_ct_scan(mhd_path)
+            print(f"Volume shape: {volume.shape}, dtype: {volume.dtype}")
             normalized = normalize_hu(volume)
+            print(f"Normalized range: [{normalized.min():.4f}, {normalized.max():.4f}]")
             
             # Load model
             model = load_model()
             
             # Perform inference
+            print("Running sliding window inference...")
             prediction = sliding_window_inference(
                 normalized, model, 
                 patch_size=PATCH_SIZE,
-                stride=(16, 32, 32),
                 device=DEVICE
             )
             
             # Find nodule candidates
+            print("Finding nodule candidates...")
+            import time as time_mod
+            t0 = time_mod.time()
             nodules = find_nodule_candidates(prediction, threshold=0.5, min_size=20)
+            print(f"Found {len(nodules)} nodules in {time_mod.time()-t0:.1f}s")
             
             inference_time = int((time.time() - start_time) * 1000)
             
-            # Get middle slice for visualization
+            # Get middle slice for visualization (downscale to 128x128 for fast JSON)
             mid_slice = volume.shape[0] // 2
-            slice_data = normalized[mid_slice].tolist()
-            pred_slice = prediction[mid_slice].tolist()
+            slice_2d = normalized[mid_slice]
+            pred_2d = prediction[mid_slice]
+            
+            # Downscale to 128x128 using strided sampling
+            step_h = max(1, slice_2d.shape[0] // 128)
+            step_w = max(1, slice_2d.shape[1] // 128)
+            slice_data = slice_2d[::step_h, ::step_w].tolist()
+            pred_slice = pred_2d[::step_h, ::step_w].tolist()
+            
+            print(f"Building response... (slice: {len(slice_data)}x{len(slice_data[0]) if slice_data else 0})")
             
             # Create report
             max_conf = max([n['probability'] for n in nodules]) if nodules else 0.0
@@ -219,7 +234,7 @@ def predict():
                 inference_time_ms=inference_time
             )
             
-            return jsonify({
+            response_data = {
                 'success': True,
                 'report_id': report_id,
                 'nodules': nodules,
@@ -229,7 +244,9 @@ def predict():
                 'spacing': metadata['spacing'],
                 'slice_data': slice_data,
                 'prediction_slice': pred_slice
-            })
+            }
+            print(f"Sending response: {len(nodules)} nodules, {inference_time}ms total")
+            return jsonify(response_data)
         
         finally:
             # Cleanup
@@ -551,4 +568,4 @@ if __name__ == '__main__':
         print(f"Warning: Could not load model: {e}")
     
     print("\nStarting server on http://localhost:5001")
-    app.run(host='0.0.0.0', port=5001, debug=True)
+    app.run(host='0.0.0.0', port=5001, debug=False)

@@ -195,8 +195,9 @@ def sliding_window_inference(
     volume: np.ndarray,
     model,
     patch_size: Tuple[int, int, int] = PATCH_SIZE,
-    stride: Tuple[int, int, int] = (16, 32, 32),
-    device: str = 'cpu'
+    stride: Tuple[int, int, int] = (32, 64, 64),
+    device: str = 'cpu',
+    batch_size: int = 8
 ) -> np.ndarray:
     """
     Perform sliding window inference on a full CT volume.
@@ -205,17 +206,22 @@ def sliding_window_inference(
         volume: Normalized 3D CT volume
         model: PyTorch model
         patch_size: Size of patches for inference
-        stride: Stride between patches
+        stride: Stride between patches (larger = faster, less overlap)
         device: Device for inference
+        batch_size: Number of patches to process in parallel
     
     Returns:
         Prediction volume with same shape as input
     """
     import torch
+    import time
     
     model.eval()
     d, h, w = patch_size
     sd, sh, sw = stride
+    
+    # Store original shape before any padding
+    orig_shape = volume.shape
     
     # Pad volume if necessary
     vd, vh, vw = volume.shape
@@ -228,37 +234,67 @@ def sliding_window_inference(
     
     vd, vh, vw = volume.shape
     
+    # Pre-compute all patch positions
+    positions = []
+    for z in range(0, vd - d + 1, sd):
+        for y in range(0, vh - h + 1, sh):
+            for x in range(0, vw - w + 1, sw):
+                positions.append((z, y, x))
+    
+    total_patches = len(positions)
+    print(f"  Inference: {total_patches} patches (stride={stride}, batch_size={batch_size})")
+    
     # Initialize output and count arrays
     output = np.zeros((vd, vh, vw), dtype=np.float32)
     count = np.zeros((vd, vh, vw), dtype=np.float32)
     
-    # Sliding window
+    start_time = time.time()
+    
+    # Process patches in batches
     with torch.no_grad():
-        for z in range(0, vd - d + 1, sd):
-            for y in range(0, vh - h + 1, sh):
-                for x in range(0, vw - w + 1, sw):
-                    patch = volume[z:z+d, y:y+h, x:x+w]
-                    
-                    # Convert to tensor
-                    patch_tensor = torch.from_numpy(patch).float()
-                    patch_tensor = patch_tensor.unsqueeze(0).unsqueeze(0)  # Add batch and channel dims
-                    patch_tensor = patch_tensor.to(device)
-                    
-                    # Predict
-                    pred = model(patch_tensor)
-                    pred = pred.squeeze().cpu().numpy()
-                    
-                    # Accumulate
-                    output[z:z+d, y:y+h, x:x+w] += pred
-                    count[z:z+d, y:y+h, x:x+w] += 1
+        for batch_start in range(0, total_patches, batch_size):
+            batch_end = min(batch_start + batch_size, total_patches)
+            batch_positions = positions[batch_start:batch_end]
+            
+            # Extract batch of patches
+            batch_patches = []
+            for z, y, x in batch_positions:
+                patch = volume[z:z+d, y:y+h, x:x+w]
+                batch_patches.append(patch)
+            
+            # Stack into batch tensor
+            batch_tensor = torch.from_numpy(np.stack(batch_patches)).float()
+            batch_tensor = batch_tensor.unsqueeze(1)  # Add channel dim: (B, 1, D, H, W)
+            batch_tensor = batch_tensor.to(device)
+            
+            # Predict entire batch
+            preds = model(batch_tensor)
+            preds = preds.squeeze(1).cpu().numpy()  # (B, D, H, W)
+            
+            # Accumulate results
+            for i, (z, y, x) in enumerate(batch_positions):
+                output[z:z+d, y:y+h, x:x+w] += preds[i]
+                count[z:z+d, y:y+h, x:x+w] += 1
+            
+            # Progress logging
+            done = batch_end
+            elapsed = time.time() - start_time
+            if done > 0 and elapsed > 0:
+                speed = done / elapsed
+                remaining = (total_patches - done) / speed
+                print(f"  Progress: {done}/{total_patches} patches "
+                      f"({done*100//total_patches}%) - {remaining:.0f}s remaining")
+    
+    elapsed = time.time() - start_time
+    print(f"  Inference complete in {elapsed:.1f}s")
     
     # Average overlapping regions
-    output = np.divide(output, count, where=count > 0)
+    result = np.zeros_like(output)
+    np.divide(output, count, where=count > 0, out=result)
+    output = result
     
     # Remove padding
-    output = output[:vd-pad_d if pad_d > 0 else vd, 
-                    :vh-pad_h if pad_h > 0 else vh, 
-                    :vw-pad_w if pad_w > 0 else vw]
+    output = output[:orig_shape[0], :orig_shape[1], :orig_shape[2]]
     
     return output
 

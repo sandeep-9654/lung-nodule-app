@@ -146,7 +146,7 @@ export default function Analyze() {
 
             const response = await axios.post<AnalysisResult>(`${API_URL}/predict`, formData, {
                 headers: { 'Content-Type': 'multipart/form-data' },
-                timeout: 120000 // 2 minute timeout
+                timeout: 300000 // 5 minute timeout for large volumes
             });
 
             setResult(response.data);
@@ -162,22 +162,13 @@ export default function Analyze() {
 
             setSliceIndex(32); // Start at middle
 
-        } catch (err) {
+        } catch (err: any) {
             console.error('Analysis error:', err);
-            // Use demo mode if backend is unavailable
-            setResult({
-                success: true,
-                demo_mode: true,
-                message: 'Backend not available. Showing demo results.',
-                nodules: [
-                    { id: 1, centroid: [45, 128, 156], size_voxels: 85, probability: 0.92 },
-                    { id: 2, centroid: [32, 245, 198], size_voxels: 62, probability: 0.87 }
-                ],
-                nodule_count: 2,
-                inference_time_ms: 12500
-            });
-            setSlices(generateDemoSlices());
-            setSliceIndex(32);
+            const message = err?.response?.data?.error
+                || err?.message
+                || 'Analysis failed. Please try again.';
+            setError(message);
+            setResult(null);
         } finally {
             setLoading(false);
         }
